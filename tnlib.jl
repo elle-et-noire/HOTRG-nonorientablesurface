@@ -1,14 +1,5 @@
 using ITensors, LinearAlgebra
 
-function isometry(A::ITensor, B::ITensor; maxdim)
-  iAB = commonind(A, B)
-  iA = noprime(uniqueind(A, iAB, noprime(iAB)))
-  iB = noprime(uniqueind(B, iAB, iAB'))
-  AA = A * prime(A, 4, iA, iAB)
-  BB = B * prime(B, 4, iB, iAB)
-  U, _, _ = svd(AA * BB, (iA, iB); maxdim)
-  U
-end
 
 function split(A::ITensor)
   @assert length(inds(A)) == 2
@@ -30,8 +21,18 @@ function bulk(vweight, hweight = vweight)
   A, iv, ih
 end
 
-function hotrg(A::ITensor, iv::Index, ih::Index; maxdim, stepnum, eigvalnum, withsro = true)
-  @assert hassameinds([iv, ih, iv', ih'], A)
+function isometry(A::ITensor, B::ITensor; maxdim)
+  iAB = commonind(A, B)
+  iA = noprime(uniqueind(A, iAB, noprime(iAB)))
+  iB = noprime(uniqueind(B, iAB, iAB'))
+  AA = A * prime(A, 4, iA, iAB)
+  BB = B * prime(B, 4, iB, iAB)
+  U, _, _ = svd(AA * BB, (iA, iB); maxdim)
+  U
+end
+
+function hotrg(T::ITensor, iv::Index, ih::Index; maxdim, stepnum, eigvalnum, withsro = true)
+  @assert hassameinds([iv, ih, iv', ih'], T)
   norms = zeros(stepnum)
   cftval = Dict(zip(["<C|i>", "<R|i>", "eigval"], [zeros(eigvalnum, stepnum) for _ in 1:3]))
 
@@ -39,20 +40,21 @@ function hotrg(A::ITensor, iv::Index, ih::Index; maxdim, stepnum, eigvalnum, wit
   O = δ(ih, ih')
   refl(i, j) = replaceinds(O, ih => i, ih' => j)
 
-  prime!(A, ih')
+  prime!(T, ih')
   for i in 1:stepnum
     if withsro
-      B = A'
+      B = T'
     else
-      B = prime(A, ih, ih'') * δ(iv, iv'')
+      B = prime(T, ih, ih'') * δ(iv, iv'')
     end
-    AB = A * B
+    U = isometry(T, B; maxdim)
+    T *= B
 
     # measure cft data of crosscap and rainbow boundary state
-    M = AB * δ(iv, iv'')
+    M = T * δ(iv, iv'')
     U1, S, _ = svd(M, (ih, ih'); maxdim = eigvalnum)
     S = storage(S)
-    norms[i] = S[1]; S /= norms[i]; AB /= norms[i]
+    norms[i] = S[1]; S /= norms[i]; T /= norms[i]
     D = length(S)
     cftval["eigval"][1:D, i] = S
 
@@ -65,15 +67,13 @@ function hotrg(A::ITensor, iv::Index, ih::Index; maxdim, stepnum, eigvalnum, wit
       cftval["<C|i>"][1:D, i] = storage(U1 * refl(ih, ih'))
     end
 
-    U = isometry(A, B; maxdim)
-    AB *= U; AB *= U'
+    T *= U; T *= U'
     O = U * refl(ih, ih''') * refl(ih', ih'') * U'
-    ih = commonind(AB, U)
+    ih = commonind(T, U)
 
-    AB = A * A'
-    U = isometry(A, A'; maxdim)
-    AB *= U; AB *= U'
-    iv = commonind(AB, U)
+    U = isometry(T, T'; maxdim)
+    T *= T'; T *= U; T *= U'
+    iv = commonind(T, U)
   end
 
   norms, cftval
