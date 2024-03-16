@@ -2,7 +2,7 @@ include("models.jl")
 using LsqFit, Plots, Printf, LaTeXStrings
 
 default(
-  fontfamily = "Times Roman",
+  fontfamily = "Computer Modern",
   guidefontsize = 12,
   tickfontsize = 10,
   legendfontsize = 10,
@@ -53,13 +53,13 @@ function main(;χ, stepnum, eigvalnum)
   f_potts3(x) = f_potts3(x, fit_potts3.param)
 
   p_fr = plot()
-  scatter!(p_fr, β, fr_ising; xscale = :log2, xlabel = L"\beta", ylabel = L"F_\mathcal{R}", legend = :topleft,
+  scatter!(p_fr, β, fr_ising; xscale = :log2, xlabel = L"\beta", ylabel = L"F_{R}", legend = :topleft,
     label = "Ising", markershape = :x, markercolor = :darkcyan, xticks = [4, 16, 64] |> x -> (x, string.(x)), format = :png)
   scatter!(p_fr, β, fr_ising_reflect; label = "Ising (reflect)", markershape = :vline, markercolor = :darkcyan)
   scatter!(p_fr, β, fr_potts3; label = "Potts3", markershape = :+, markercolor = :lightcoral)
   scatter!(p_fr, β, fr_potts3_reflect; label = "Potts3", markershape = :x, markercolor = :lightcoral)
-  plot!(p_fr, β, f_ising(β); line = :dash, linecolor = :orange, label = L"F_\mathcal{R} = \frac{0.5}{4}\ln\beta + b")
-  plot!(p_fr, β, f_potts3(β); line = :dot, linecolor = :mediumorchid, label = L"F_\mathcal{R} = \frac{0.8}{4}\ln\beta + b")
+  plot!(p_fr, β, f_ising(β); line = :dash, linecolor = :orange, label = L"F_{R} = \frac{0.5}{4}\ln\beta + b")
+  plot!(p_fr, β, f_potts3(β); line = :dot, linecolor = :mediumorchid, label = L"F_{R} = \frac{0.8}{4}\ln\beta + b")
   p_fr[:dpi] = round(Int, 4 * p_fr[:dpi])
   savefig(p_fr, "fig/fr.png")
 
@@ -71,7 +71,7 @@ function main(;χ, stepnum, eigvalnum)
   fc_potts3 = log.(abs.(cftdata_potts3_sro["<C|i>"][1, :]))
 
   p_fc = plot()
-  scatter!(p_fc, β, fc_ising; xscale = :log2, xlabel = L"\beta", ylabel = L"F_\mathcal{C}",
+  scatter!(p_fc, β, fc_ising; xscale = :log2, xlabel = L"\beta", ylabel = L"F_{C}",
     label = "Ising", markershape = :x, markercolor = :darkcyan, xticks = [4, 16, 64] |> x -> (x, string.(x)), legend = :right)
   scatter!(p_fc, β, fc_potts3; label = "Potts3", markershape = :+, markercolor = :lightcoral, format = :png)
   hline!(p_fc, [log(quantumdimension(Ising())) / 2]; line = :dash, linecolor = :orange, label = L"\frac{1}{2}\ln g_{\mathrm{Ising}}")
@@ -95,4 +95,4 @@ function main(;χ, stepnum, eigvalnum)
   savefig(p_gamma, "fig/gamma2.png")
 end
 
-main(χ = 24, stepnum = 7, eigvalnum = 3)
+main(χ = 16, stepnum = 7, eigvalnum = 3)
