@@ -1,8 +1,327 @@
+### A Pluto.jl notebook ###
+# v0.19.40
+
+using Markdown
+using InteractiveUtils
+
+# ╔═╡ a6566eb3-afe1-4efc-8c66-fcfefbd0dfb1
+using ITensors, LinearAlgebra, Plots, LsqFit, LaTeXStrings, Printf
+
+# ╔═╡ d0a2e55a-1f2b-4dcf-b640-7b0caa2b93b9
+md"""
+# Simulations for non-orientable surfaces with HOTRG
+
+This is the Pluto-notebook version of [elle-et-noire/HOTRG-nonorientablesurface](https://github.com/elle-et-noire/HOTRG-nonorientablesurface).
+"""
+
+# ╔═╡ 7af2e508-80a2-46bc-8c77-354946901cda
+md"""
+## Import dependencies
+"""
+
+# ╔═╡ af644ecf-94d5-44af-8605-70845e4b5921
+default(
+  fontfamily = "Times Roman",
+  guidefontsize = 12,
+  tickfontsize = 10,
+  legendfontsize = 10,
+  markerstrokewidth = 2,
+  margin = 5Plots.mm,
+  size = (600, 400),
+  grid = false,
+  foreground_color_legend = nothing,
+  background_color_legend = colorant"rgba(255,255,255,0.6)",
+  linewidth = 1
+)
+
+# ╔═╡ a17a1a94-71c1-4add-b1b7-ad4f540328da
+md"""
+## Set model parameters
+"""
+
+# ╔═╡ d60569bb-d3bb-4213-939a-abbe5db142d8
+begin
+
+abstract type Model end
+
+struct Ising <: Model end
+
+struct Potts <: Model
+  q::Int
+end
+
+function weight(_::Ising, β)
+  [exp(β) exp(-β); exp(-β) exp(β)]
+end
+
+function weight(p::Potts, β)
+  Diagonal([exp(β) - 1 for _ in 1:p.q]) + ones(p.q, p.q)
+end
+
+function Tc(_::Ising)
+  2 / log(1 + √2)
+end
+
+function Tc(p::Potts)
+  1 / log(1 + √p.q)
+end
+
+function centralcharge(_::Ising)
+  0.5
+end
+
+function centralcharge(p::Potts)
+  if p.q == 3
+    0.8
+  elseif p.q == 4
+    1.0
+  end
+end
+
+function quantumdimension(_::Ising)
+  1 + 1 / √2
+end
+
+function quantumdimension(p::Potts)
+  if p.q == 3
+    sqrt(3 + 6 / √5)
+  elseif p.q == 4
+    (3 + 2√2) / 2
+  end
+end
+
+end;
+
+# ╔═╡ 734825bc-2399-46b4-b973-a6b323559d9d
+md"""
+## Method to prepare initial tensor
+"""
+
+# ╔═╡ df1908d7-9721-43a4-9096-5bdfc5f43de3
+begin
+
+function split(A::ITensor; kwargs...)
+  @assert length(inds(A)) == 2
+  U, S, V = svd(A, inds(A)[1]; kwargs...)
+  sqrtS = sqrt.(S)
+  V *= replaceinds(sqrtS, commonind(U, S) => commonind(S, V)')
+  U *= sqrtS
+  U, V
+end
+
+function bulk(vweight, hweight = vweight)
+  iv = Index(size(vweight)[1])
+  ih = Index(size(hweight)[1])
+
+  V1, V2 = split(ITensor(vweight, iv, iv'); righttags = "v")
+  H1, H2 = split(ITensor(hweight, ih, ih'); righttags = "h")
+  A = δ(iv, ih, iv', ih') * V1 * V2 * H1 * H2
+
+  A, uniqueind(V1, iv), uniqueind(H1, ih)
+end
+
+end;
+
+# ╔═╡ 416e5e5d-cdc8-4d34-837d-f991ab35e4fc
+md"""
+## Methods for HOTRG
+"""
+
+# ╔═╡ b7628060-f93d-4d76-b4d4-1bc328aa7d08
+begin
+
+function isometry(A::ITensor, B::ITensor; kwargs...)
+  iAB = commonind(A, B)
+  iA = uniqueind(noprime(inds(A)), noprime(iAB), noprime(iAB))
+  iB = prime(iA)
+  AA = A * prime(A, 4, iA, iAB)
+  BB = B * prime(B, 4, iB, iAB)
+  U, _, _ = svd(AA * BB, (iA, iB); kwargs...)
+  U
+end
+
+function hotrg(T::ITensor, iv::Index, ih::Index; maxdim, stepnum, eigvalnum, withsro = true)
+  @assert hassameinds([iv, ih, iv', ih'], T)
+  norms = zeros(stepnum)
+  cftval = Dict(zip(["<C|i>", "<R|i>", "eigval"], [zeros(eigvalnum, stepnum) for _ in 1:3]))
+
+  # init spatial reflection operator
+  O = δ(ih, ih')
+  o(i, j) = begin
+  	@assert hassameinds([ih, ih'], O)
+	replaceinds(O, ih => i, ih' => j)
+  end
+
+  prime!(T, ih')
+  for i in 1:stepnum
+    if withsro
+      B = T'
+    else
+      B = prime(T, ih, ih'') * δ(iv, iv'')
+    end
+    U = isometry(T, B; maxdim, lefttags = "h$i")
+    T *= B
+
+    # measure cft data of crosscap and rainbow boundary state
+    M = T * δ(iv, iv'')
+    U1, S, _ = svd(M, (ih, ih'); maxdim = eigvalnum)
+    S = storage(S)
+    norms[i] = S[1]; S /= norms[i]; T /= norms[i]
+    D = length(S)
+    cftval["eigval"][1:D, i] = S
+
+    # if the copy is reflected, correspondence between crosscap/rainbow and contracting δ_ij/O_ij flips
+    if withsro
+      cftval["<C|i>"][1:D, i] = storage(U1 * δ(ih, ih'))
+      cftval["<R|i>"][1:D, i] = storage(U1 * o(ih, ih'))
+    else
+      cftval["<R|i>"][1:D, i] = storage(U1 * δ(ih, ih'))
+      cftval["<C|i>"][1:D, i] = storage(U1 * o(ih, ih'))
+    end
+
+    T *= U; T *= prime(U', ih', ih'')
+    O = U * o(ih, ih''') * o(ih', ih'') * prime(U', ih', ih'')
+    ih = commonind(T, U)
+	@assert hassameinds([ih, ih'], O)
+
+    U = isometry(T, T'; maxdim, lefttags = "v$i")
+    T *= T'; T *= U; T *= prime(U', iv', iv'')
+    iv = commonind(T, U)
+  end
+
+  norms, cftval
+end
+
+end;
+
+# ╔═╡ 41f412bc-e269-11ee-2940-87a04378994f
+md"""
+## Calculate crosscap/rainbow free energy term
+"""
+
+# ╔═╡ d30f24a2-9508-405c-b855-f662b090f68d
+begin
+	χ = 16
+	stepnum = 7
+	eigvalnum = 3
+end;
+
+# ╔═╡ 2a2ef26e-b829-4474-b70a-8ab5a8d77c59
+_, cftdata_ising_sro = hotrg(bulk(weight(Ising(), inv(Tc(Ising()))))...; maxdim = χ, stepnum, eigvalnum);
+
+# ╔═╡ 12755b73-a60e-48f6-b7bd-10ea354b135f
+_, cftdata_ising_refl = hotrg(bulk(weight(Ising(), inv(Tc(Ising()))))...; maxdim = χ, stepnum, eigvalnum, withsro = false);
+
+# ╔═╡ 23adbae7-b200-486a-893c-4cd145bbefc5
+_, cftdata_potts3_sro = hotrg(bulk(weight(Potts(3), inv(Tc(Potts(3)))))...; maxdim = χ, stepnum, eigvalnum);
+
+# ╔═╡ 42b76f9e-5f86-4a8e-9625-0c2a1cbe841d
+_, cftdata_potts3_refl = hotrg(bulk(weight(Potts(3), inv(Tc(Potts(3)))))...; maxdim = χ, stepnum, eigvalnum, withsro = false);
+
+# ╔═╡ 5bc8efca-3163-40de-b607-885d7b7ae429
+md"""
+## Plot the rainbow free energy term
+"""
+
+# ╔═╡ b21f5e6a-4ac7-4578-8f63-cf4ef6dc195d
+begin
+
+fr_ising = log.(abs.(cftdata_ising_sro["<R|i>"][1, :]))
+fr_ising_reflect = log.(abs.(cftdata_ising_refl["<R|i>"][1, :]))
+fr_potts3 = log.(abs.(cftdata_potts3_sro["<R|i>"][1, :]))
+fr_potts3_reflect = log.(abs.(cftdata_potts3_refl["<R|i>"][1, :]))
+β = 2 .^ (1:stepnum)
+
+fitrange_ising = 1:6
+fitrange_potts3 = 1:3
+
+f_ising(x, p) = @. (centralcharge(Ising()) / 4) * log(x) + p[1]
+fit_ising = curve_fit(f_ising, β[fitrange_ising], fr_ising[fitrange_ising], [0.])
+f_ising(x) = f_ising(x, fit_ising.param)
+f_potts3(x, p) = @. (centralcharge(Potts(3)) / 4) * log(x) + p[1]
+fit_potts3 = curve_fit(f_potts3, β[fitrange_potts3], fr_potts3[fitrange_potts3], [0.])
+f_potts3(x) = f_potts3(x, fit_potts3.param)
+
+p_fr = plot()
+scatter!(p_fr, β, fr_ising; xscale = :log2, xlabel = L"\beta", ylabel = L"F_\mathcal{R}", legend = :topleft,
+  label = "Ising", markershape = :x, markercolor = :darkcyan, xticks = [4, 16, 64] |> x -> (x, string.(x)), format = :png)
+scatter!(p_fr, β, fr_ising_reflect; label = "Ising (reflect)", markershape = :vline, markercolor = :darkcyan)
+scatter!(p_fr, β, fr_potts3; label = "Potts3", markershape = :+, markercolor = :lightcoral)
+scatter!(p_fr, β, fr_potts3_reflect; label = "Potts3", markershape = :x, markercolor = :lightcoral)
+plot!(p_fr, β, f_ising(β); line = :dash, linecolor = :orange, label = L"F_\mathcal{R} = \frac{0.5}{4}\ln\beta + b")
+plot!(p_fr, β, f_potts3(β); line = :dot, linecolor = :mediumorchid, label = L"F_\mathcal{R} = \frac{0.8}{4}\ln\beta + b")
+p_fr[:dpi] = round(Int, 4 * p_fr[:dpi])
+p_fr
+
+end
+
+# ╔═╡ 7f5fcaec-82fa-4a2b-956f-71018a5ca4f3
+md"""
+## Plot the crosscap free energy term
+"""
+
+# ╔═╡ 7bbc356e-2ee2-495f-9b09-f6fc6ac404a6
+begin
+
+fc_ising = log.(abs.(cftdata_ising_sro["<C|i>"][1, :]))
+fc_potts3 = log.(abs.(cftdata_potts3_sro["<C|i>"][1, :]))
+
+p_fc = plot()
+scatter!(p_fc, β, fc_ising; xscale = :log2, xlabel = L"\beta", ylabel = L"F_\mathcal{C}",
+  label = "Ising", markershape = :x, markercolor = :darkcyan, xticks = [4, 16, 64] |> x -> (x, string.(x)), legend = :right)
+scatter!(p_fc, β, fc_potts3; label = "Potts3", markershape = :+, markercolor = :lightcoral, format = :png)
+hline!(p_fc, [log(quantumdimension(Ising())) / 2]; line = :dash, linecolor = :orange, label = L"\frac{1}{2}\ln g_{\mathrm{Ising}}")
+hline!(p_fc, [log(quantumdimension(Potts(3))) / 2]; line = :dot, linecolor = :mediumorchid, label = L"\frac{1}{2}\ln g_{\mathrm{Potts3}}")
+p_fc[:dpi] = round(Int, 4 * p_fc[:dpi])
+p_fc
+
+end
+
+# ╔═╡ 0dad2252-7f0e-41ea-b3d5-8fec3b908a76
+md"""
+## Plot one-point functions of the Ising CFT
+"""
+
+# ╔═╡ 6e1885da-4549-4cab-9a1a-6996ab2aaffc
+begin
+
+gamma2_ising = cftdata_ising_sro["<C|i>"][1:3, :] .^ 2
+
+p_gamma = plot()
+plot!(p_gamma, β, [gamma2_ising[i, :] for i in 1:3]; xscale = :log2, xlabel = L"\beta", ylabel = L"\Gamma_k^2",
+  label = nothing, markershape = :x, color = :darkcyan, xticks = [4, 16, 64] |> x -> (x, string.(x)), legend = :right)
+hline!(p_gamma, [1 + 1 / √2], label = L"\Gamma_\mathrm{I}^2 = 1 + 1 / \sqrt{2}")
+hline!(p_gamma, [1 - 1 / √2], label = L"\Gamma_{\epsilon}^2 = 1 - 1 / \sqrt{2}")
+hline!(p_gamma, [0], label = L"\Gamma_{\sigma}^2 = 0")
+p_gamma[:dpi] = round(Int, 4 * p_gamma[:dpi])
+p_gamma
+
+end
+
+# ╔═╡ 00000000-0000-0000-0000-000000000001
+PLUTO_PROJECT_TOML_CONTENTS = """
+[deps]
+ITensors = "9136182c-28ba-11e9-034c-db9fb085ebd5"
+LaTeXStrings = "b964fa9f-0449-5b57-a5c2-d3ea65f4040f"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+LsqFit = "2fda8390-95c7-5789-9bda-21331edee243"
+Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
+Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
+
+[compat]
+ITensors = "~0.3.57"
+LaTeXStrings = "~1.3.1"
+LsqFit = "~0.15.0"
+Plots = "~1.40.2"
+"""
+
+# ╔═╡ 00000000-0000-0000-0000-000000000002
+PLUTO_MANIFEST_TOML_CONTENTS = """
 # This file is machine-generated - editing it directly is not advised
 
 julia_version = "1.10.2"
 manifest_format = "2.0"
-project_hash = "3347b6af5e868610b72d6168a6f70fa17d84ed79"
+project_hash = "4300dd65d4eee21e1b5419212c31688220d837b5"
 
 [[deps.Accessors]]
 deps = ["CompositionsBase", "ConstructionBase", "Dates", "InverseFunctions", "LinearAlgebra", "MacroTools", "Markdown", "Test"]
@@ -226,12 +545,6 @@ git-tree-sha1 = "6cbbd4d241d7e6579ab354737f4dd95ca43946e1"
 uuid = "f0e56b4a-5159-44fe-b623-3e5288b988bb"
 version = "2.4.1"
 
-[[deps.Configurations]]
-deps = ["ExproniconLite", "OrderedCollections", "TOML"]
-git-tree-sha1 = "4358750bb58a3caefd5f37a4a0c5bfdbbf075252"
-uuid = "5218b696-f38b-4ac9-8b61-a12ec717816d"
-version = "0.17.6"
-
 [[deps.ConstructionBase]]
 deps = ["LinearAlgebra"]
 git-tree-sha1 = "c53fc348ca4d40d7b371e71fd52251839080cbc9"
@@ -372,16 +685,6 @@ git-tree-sha1 = "27415f162e6028e81c72b82ef756bf321213b6ec"
 uuid = "e2ba6199-217a-4e67-a87a-7c52f15ade04"
 version = "0.1.10"
 
-[[deps.ExpressionExplorer]]
-git-tree-sha1 = "bce17cd0180a75eec637d6e3f8153011b8bdb25a"
-uuid = "21656369-7473-754a-2065-74616d696c43"
-version = "1.0.0"
-
-[[deps.ExproniconLite]]
-git-tree-sha1 = "5552cf384e4577c5dd2db57d7086a4a41747dbb9"
-uuid = "55351af7-c7e9-48d6-89ff-24e801d99491"
-version = "0.10.6"
-
 [[deps.ExternalDocstrings]]
 git-tree-sha1 = "1224740fc4d07c989949e1c1b508ebd49a65a5f6"
 uuid = "e189563c-0753-4f5e-ad5c-be4293c83fb4"
@@ -503,12 +806,6 @@ version = "0.4.8"
 deps = ["Random"]
 uuid = "9fa8497b-333b-5362-9e8d-4d0656e87820"
 
-[[deps.FuzzyCompletions]]
-deps = ["REPL"]
-git-tree-sha1 = "40ec72c57559a4473961bbcd12c96bcd4c2aaab4"
-uuid = "fb4132e2-a121-4a70-b8a1-d5b831dcdcc2"
-version = "0.5.4"
-
 [[deps.GLFW_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Libglvnd_jll", "Xorg_libXcursor_jll", "Xorg_libXi_jll", "Xorg_libXinerama_jll", "Xorg_libXrandr_jll"]
 git-tree-sha1 = "ff38ba61beff76b8f4acad8ab0c97ef73bb670cb"
@@ -607,12 +904,6 @@ deps = ["DualNumbers", "LinearAlgebra", "OpenLibm_jll", "SpecialFunctions"]
 git-tree-sha1 = "f218fe3736ddf977e0e772bc9a586b2383da2685"
 uuid = "34004b35-14d8-5ef3-9330-4cdb6864b03a"
 version = "0.3.23"
-
-[[deps.HypertextLiteral]]
-deps = ["Tricks"]
-git-tree-sha1 = "7134810b1afce04bbc1045ca1985fbe81ce17653"
-uuid = "ac1192a8-f4b3-4bfe-ba22-af5b92cd3ab2"
-version = "0.9.5"
 
 [[deps.ITensors]]
 deps = ["Adapt", "BitIntegers", "ChainRulesCore", "Compat", "Dictionaries", "DocStringExtensions", "Functors", "HDF5", "IsApprox", "KrylovKit", "LinearAlgebra", "LinearMaps", "NDTensors", "PackageCompiler", "Pkg", "Printf", "Random", "Requires", "SerializedElementArrays", "SimpleTraits", "StaticArrays", "Strided", "TimerOutputs", "TupleTools", "Zeros", "ZygoteRules"]
@@ -746,11 +1037,6 @@ version = "0.16.2"
     DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
     SymEngine = "123dc426-2d89-5057-bbad-38513e3affd8"
 
-[[deps.LazilyInitializedFields]]
-git-tree-sha1 = "8f7f3cabab0fd1800699663533b6d5cb3fc0e612"
-uuid = "0e77f7df-68c5-4e49-93ce-4cd80f5598bf"
-version = "1.2.2"
-
 [[deps.LazyArtifacts]]
 deps = ["Artifacts", "Pkg"]
 uuid = "4af54fe1-eca0-43a8-85a7-787d91b784e3"
@@ -877,11 +1163,6 @@ git-tree-sha1 = "40acc20cfb253cf061c1a2a2ea28de85235eeee1"
 uuid = "2fda8390-95c7-5789-9bda-21331edee243"
 version = "0.15.0"
 
-[[deps.MIMEs]]
-git-tree-sha1 = "65f28ad4b594aebe22157d6fac869786a255b7eb"
-uuid = "6c6e2e6c-3030-632d-7369-2d6c69616d65"
-version = "0.1.4"
-
 [[deps.MLStyle]]
 git-tree-sha1 = "bc38dff0548128765760c79eb7388a4b37fae2c8"
 uuid = "d8e11817-5142-5d16-987a-aa16d5891078"
@@ -910,12 +1191,6 @@ deps = ["Markdown", "Random"]
 git-tree-sha1 = "2fa9ee3e63fd3a4f7a9a4f4744a52f4856de82df"
 uuid = "1914dd2f-81c6-5fcd-8719-6d5c9610ff09"
 version = "0.5.13"
-
-[[deps.Malt]]
-deps = ["Distributed", "Logging", "RelocatableFolders", "Serialization", "Sockets"]
-git-tree-sha1 = "18cf4151e390fce29ca846b92b06baf9bc6e002e"
-uuid = "36869731-bdee-424d-aa32-cab38c994e3b"
-version = "1.1.1"
 
 [[deps.MappedArrays]]
 git-tree-sha1 = "2dab0221fe2b0f2cb6754eaa743cc266339f527e"
@@ -966,12 +1241,6 @@ uuid = "a63ad114-7e13-5084-954f-fe012c677804"
 [[deps.MozillaCACerts_jll]]
 uuid = "14a3606d-f60d-562e-9121-12d972cd8159"
 version = "2023.1.10"
-
-[[deps.MsgPack]]
-deps = ["Serialization"]
-git-tree-sha1 = "f5db02ae992c260e4826fe78c942954b48e1d9c2"
-uuid = "99f44e22-a591-53d1-9472-aa23ef4bd671"
-version = "1.2.1"
 
 [[deps.NDTensors]]
 deps = ["Accessors", "Adapt", "ArrayLayouts", "BlockArrays", "Compat", "Dictionaries", "EllipsisNotation", "FLoops", "FillArrays", "Folds", "Functors", "GPUArraysCore", "HDF5", "HalfIntegers", "InlineStrings", "LinearAlgebra", "MappedArrays", "PackageExtensionCompat", "Random", "SimpleTraits", "SparseArrays", "SplitApplyCombine", "StaticArrays", "Strided", "StridedViews", "TimerOutputs", "TupleTools", "VectorInterface"]
@@ -1141,23 +1410,6 @@ version = "1.40.2"
     ImageInTerminal = "d8c32880-2388-543b-8c61-d9f865259254"
     Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 
-[[deps.Pluto]]
-deps = ["Base64", "Configurations", "Dates", "Downloads", "ExpressionExplorer", "FileWatching", "FuzzyCompletions", "HTTP", "HypertextLiteral", "InteractiveUtils", "Logging", "LoggingExtras", "MIMEs", "Malt", "Markdown", "MsgPack", "Pkg", "PlutoDependencyExplorer", "PrecompileSignatures", "PrecompileTools", "REPL", "RegistryInstances", "RelocatableFolders", "Scratch", "Sockets", "TOML", "Tables", "URIs", "UUIDs"]
-git-tree-sha1 = "35280d2e6b2211bc5f9e913460c263ac89ef56f0"
-uuid = "c3e4b0f8-55cb-11ea-2926-15256bba5781"
-version = "0.19.40"
-
-[[deps.PlutoDependencyExplorer]]
-deps = ["ExpressionExplorer", "InteractiveUtils", "Markdown"]
-git-tree-sha1 = "4bc5284f77d731196d3e97f23abb732ad6f2a6e4"
-uuid = "72656b73-756c-7461-726b-72656b6b696b"
-version = "1.0.4"
-
-[[deps.PrecompileSignatures]]
-git-tree-sha1 = "18ef344185f25ee9d51d80e179f8dad33dc48eb1"
-uuid = "91cefc8d-f054-46dc-8f8c-26e11d7c5411"
-version = "3.0.3"
-
 [[deps.PrecompileTools]]
 deps = ["Preferences"]
 git-tree-sha1 = "5aa36f7049a63a1528fe8f7c3f2113413ffd4e1f"
@@ -1221,12 +1473,6 @@ deps = ["Adapt"]
 git-tree-sha1 = "02d31ad62838181c1a3a5fd23a1ce5914a643601"
 uuid = "42d2dcc6-99eb-4e98-b66c-637b7d73030e"
 version = "0.1.3"
-
-[[deps.RegistryInstances]]
-deps = ["LazilyInitializedFields", "Pkg", "TOML", "Tar"]
-git-tree-sha1 = "ffd19052caf598b8653b99404058fce14828be51"
-uuid = "2792f1a3-b283-48e8-9a74-f99dce5104f3"
-version = "0.1.0"
 
 [[deps.RelocatableFolders]]
 deps = ["SHA", "Scratch"]
@@ -1493,11 +1739,6 @@ version = "0.4.80"
     LazyArrays = "5078a376-72f3-5289-bfd5-ec5146d43c02"
     OnlineStatsBase = "925886fa-5bf2-5e8e-b522-a9147a512338"
     Referenceables = "42d2dcc6-99eb-4e98-b66c-637b7d73030e"
-
-[[deps.Tricks]]
-git-tree-sha1 = "eae1bb484cd63b36999ee58be2de6c178105112f"
-uuid = "410a4b4d-49e4-4fbc-ab6d-cb71b17b3775"
-version = "0.1.8"
 
 [[deps.TupleTools]]
 git-tree-sha1 = "41d61b1c545b06279871ef1a4b5fcb2cac2191cd"
@@ -1857,3 +2098,30 @@ deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg", "Wayland_jll", "Wayland_prot
 git-tree-sha1 = "9c304562909ab2bab0262639bd4f444d7bc2be37"
 uuid = "d8fb68d0-12a3-5cfd-a85a-d49703b185fd"
 version = "1.4.1+1"
+"""
+
+# ╔═╡ Cell order:
+# ╟─d0a2e55a-1f2b-4dcf-b640-7b0caa2b93b9
+# ╟─7af2e508-80a2-46bc-8c77-354946901cda
+# ╠═a6566eb3-afe1-4efc-8c66-fcfefbd0dfb1
+# ╠═af644ecf-94d5-44af-8605-70845e4b5921
+# ╟─a17a1a94-71c1-4add-b1b7-ad4f540328da
+# ╠═d60569bb-d3bb-4213-939a-abbe5db142d8
+# ╟─734825bc-2399-46b4-b973-a6b323559d9d
+# ╠═df1908d7-9721-43a4-9096-5bdfc5f43de3
+# ╟─416e5e5d-cdc8-4d34-837d-f991ab35e4fc
+# ╠═b7628060-f93d-4d76-b4d4-1bc328aa7d08
+# ╟─41f412bc-e269-11ee-2940-87a04378994f
+# ╠═d30f24a2-9508-405c-b855-f662b090f68d
+# ╠═2a2ef26e-b829-4474-b70a-8ab5a8d77c59
+# ╠═12755b73-a60e-48f6-b7bd-10ea354b135f
+# ╠═23adbae7-b200-486a-893c-4cd145bbefc5
+# ╠═42b76f9e-5f86-4a8e-9625-0c2a1cbe841d
+# ╟─5bc8efca-3163-40de-b607-885d7b7ae429
+# ╠═b21f5e6a-4ac7-4578-8f63-cf4ef6dc195d
+# ╟─7f5fcaec-82fa-4a2b-956f-71018a5ca4f3
+# ╠═7bbc356e-2ee2-495f-9b09-f6fc6ac404a6
+# ╠═0dad2252-7f0e-41ea-b3d5-8fec3b908a76
+# ╠═6e1885da-4549-4cab-9a1a-6996ab2aaffc
+# ╟─00000000-0000-0000-0000-000000000001
+# ╟─00000000-0000-0000-0000-000000000002

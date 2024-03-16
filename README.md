@@ -6,12 +6,12 @@ These are demo codes that is related to our paper below:
 
 ## How to use
 
-1. You need Julia. [Juliaup](https://github.com/JuliaLang/juliaup) is easy!
+1. You need Julia. [juliaup](https://github.com/JuliaLang/juliaup) is easy!
 
-2. Install packages and run.
+2. Install dependencies and run. Precompilation takes a few minutes.
 
 ```sh
-HOTRG-nonorientablesurface $ julia
+HOTRG-nonorientablesurface$ julia
 julia> using Pkg; Pkg.activate(".")
 julia> include("main.jl")
 ```
