@@ -1,8 +1,7 @@
 using ITensors, LinearAlgebra
 
-function split(A::ITensor; kwargs...)
-  @assert length(inds(A)) == 2
-  U, S, V = svd(A, inds(A)[1]; kwargs...)
+function split(A::ITensor, Linds...; kwargs...)
+  U, S, V = svd(A, Linds; kwargs...)
   sqrtS = sqrt.(S)
   V *= replaceinds(sqrtS, commonind(U, S) => commonind(S, V)')
   U *= sqrtS
@@ -13,8 +12,8 @@ function bulk(vweight, hweight = vweight)
   iv = Index(size(vweight)[1])
   ih = Index(size(hweight)[1])
 
-  V1, V2 = split(ITensor(vweight, iv, iv'); righttags = "v")
-  H1, H2 = split(ITensor(hweight, ih, ih'); righttags = "h")
+  V1, V2 = split(ITensor(vweight, iv, iv'), iv; righttags = "v")
+  H1, H2 = split(ITensor(hweight, ih, ih'), ih; righttags = "h")
   A = δ(iv, ih, iv', ih') * V1 * V2 * H1 * H2
 
   A, uniqueind(V1, iv), uniqueind(H1, ih)
@@ -80,4 +79,64 @@ function hotrg(T::ITensor, iv::Index, ih::Index; maxdim, stepnum, eigvalnum, wit
   end
 
   norms, cftval
+end
+
+
+"""
+Insert isometry between A and B.
+"""
+function gilt(A::ITensor, B::ITensor, C::ITensor, D::ITensor; ϵ)
+  T = [A, B, D, C]
+  for i in 1:4
+    @assert length(commoninds(T[i], T[mod1(i + 1, 4)])) == 1
+  end
+
+  iAB = commonind(A, B)
+
+  E = C * D
+  E *= A
+  E *= prime(B, iAB)
+  U, S, _ = svd(E, (iAB, iAB'))
+  t = storage(U * δ(iAB, iAB'))
+  S ./= maximum(S)
+  for i in eachindex(t)
+    t[i] *= storage(S)[i] |> x -> x^2 / (x^2 + ϵ^2)
+  end
+  R = ITensor(t, commonind(U, S)) * U
+  @assert hassameinds([iAB, iAB'], R)
+  U, V = split(R, iAB)
+  A *= U; B *= noprime(V)
+end
+
+
+function trg(A::ITensor, iv::Index, ih::Index; maxdim, stepnum, eigvalnum)
+  @assert hassameinds([iv, iv', ih, ih'], A)
+  norms = zeros(stepnum)
+  eigval = zeros(eigvalnum, stepnum)
+
+  for i in 1:stepnum
+    F1, F3 = split(A, (iv, ih); maxdim, righttags = "v$i")
+    F2, F4 = split(A, (iv, ih'); maxdim, righttags = "h$i")
+    iv = uniqueind(F1, A); ih = uniqueind(F2, A)
+    A = F1' * F2 * noprime(F3) * F4
+    @assert hassameinds([iv, iv', ih, ih'], A)
+
+    M = A * δ(iv, iv')
+    norms[i] = scalar(M * δ(ih, ih'))
+    A /= norms[i]
+    _, S, _ = svd(M, ih; maxdim = eigvalnum)
+    S = storage(S)
+    eigval[eachindex(S), i] = S / norms[i]
+  end
+
+  norms, eigval
+end
+
+function logpartfunc(norms; sitenum_per_step)
+  sum = 0.; sitenum = 1; lnz = zero(norms)
+  for i in eachindex(norms)
+    sitenum *= sitenum_per_step
+    lnz[i] = sum += log(norms[i]) / sitenum
+  end
+  lnz
 end

@@ -1,4 +1,5 @@
 include("tnlib.jl")
+using QuadGK
 
 abstract type Model end
 
@@ -46,4 +47,12 @@ function quantumdimension(p::Potts)
   elseif p.q == 4
     (3 + 2√2) / 2
   end
+end
+
+function freeenergy(_::Ising, β)
+  (Main.quadgk(k1 ->
+  Main.quadgk(k2 ->
+    log(cosh(2β)^2 - sinh(2β) * (cos(k1) + cos(k2))) / 8pi^2,
+  0, 2pi)[1],
+  0, 2pi)[1] + log(2)) / -β
 end

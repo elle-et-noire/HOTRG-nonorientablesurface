@@ -2,7 +2,7 @@ include("models.jl")
 using LsqFit, Plots, Printf, LaTeXStrings
 
 default(
-  fontfamily = "Computer Modern",
+  fontfamily = "Times New Roman",
   guidefontsize = 12,
   tickfontsize = 10,
   legendfontsize = 10,
@@ -95,4 +95,21 @@ function main(;χ, stepnum, eigvalnum)
   savefig(p_gamma, "fig/gamma2.png")
 end
 
-main(χ = 16, stepnum = 7, eigvalnum = 3)
+# main(χ = 16, stepnum = 7, eigvalnum = 3)
+
+function impltrg(;χ, stepnum, eigvalnum, relT)
+  f = []
+  βs = inv.(Tc(Ising()) * relT)
+  for β in βs
+    norms, eigval = trg(bulk(weight(Ising(), β))...; maxdim = χ, stepnum, eigvalnum)
+    lnz = logpartfunc(norms, sitenum_per_step = 2)
+    push!(f, lnz[end] / -β)
+  end
+
+  scatter(βs, f)
+  xs = [minimum(βs):1e-3:maximum(βs);]
+  plot!(xs, xs .|> x -> freeenergy(Ising(), x))
+  savefig("fig/f.png")
+end
+
+@time impltrg(χ = 24, stepnum = 15, eigvalnum = 3, relT = [0.95:1e-2:1.05;])
