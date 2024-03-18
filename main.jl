@@ -130,6 +130,12 @@ function err4ϵ(;χ, stepnum, ϵs)
   lnz = logpartfunc(norms, sitenum_per_step = 2)
   f_trg = lnz / -β
   plot!(abs.(f_trg .- f_exact), label = "trg")
+  open("data/ferr.txt", "w") do fp
+    for i in eachindex(ϵs)
+      Base.print_array(fp, (f[i] .- f_exact))
+    end
+    Base.print_array(fp, (f_trg .- f_exact))
+  end
   savefig("fig/ferr.png")
 end
 
