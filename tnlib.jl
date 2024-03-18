@@ -1,10 +1,13 @@
 using ITensors, LinearAlgebra
 
-function split(A::ITensor, Linds...; kwargs...)
+function split(A::ITensor, Linds...; conn = true, kwargs...)
   U, S, V = svd(A, Linds; kwargs...)
   sqrtS = sqrt.(S)
   V *= replaceinds(sqrtS, commonind(U, S) => commonind(S, V)')
   U *= sqrtS
+  if conn
+    replaceinds!(V, commonind(U, S)' => commonind(U, S))
+  end
   U, V
 end
 
@@ -12,8 +15,8 @@ function bulk(vweight, hweight = vweight)
   iv = Index(size(vweight)[1])
   ih = Index(size(hweight)[1])
 
-  V1, V2 = split(ITensor(vweight, iv, iv'), iv; righttags = "v")
-  H1, H2 = split(ITensor(hweight, ih, ih'), ih; righttags = "h")
+  V1, V2 = split(ITensor(vweight, iv, iv'), iv; conn = false, righttags = "v")
+  H1, H2 = split(ITensor(hweight, ih, ih'), ih; conn = false, righttags = "h")
   A = δ(iv, ih, iv', ih') * V1 * V2 * H1 * H2
 
   A, uniqueind(V1, iv), uniqueind(H1, ih)
@@ -86,17 +89,24 @@ end
 Insert isometry between A and B.
 """
 function gilt(A::ITensor, B::ITensor, C::ITensor, D::ITensor; ϵ)
-  T = [A, B, D, C]
+  T = [A, B, C, D]
+  iin = []
   for i in 1:4
     @assert length(commoninds(T[i], T[mod1(i + 1, 4)])) == 1
+    push!(iin, commonind(T[i], T[mod1(i + 1, 4)]))
+  end
+  for i in 1:2
+    @assert length(commoninds(T[i], T[mod1(i + 2, 4)])) == 0
   end
 
   iAB = commonind(A, B)
+  TT = Vector{ITensor}(undef, 4)
+  for i in 1:4
+    TT[i] = T[i] * prime(T[i], 2, iin[i], iin[mod1(i - 1, 4)])
+  end
+  EE = ((TT[3] * TT[4]) * TT[1]) * prime(TT[2], iAB, iAB'')
 
-  E = C * D
-  E *= A
-  E *= prime(B, iAB)
-  U, S, _ = svd(E, (iAB, iAB'))
+  U, S, _ = svd(EE, (iAB, iAB'))
   t = storage(U * δ(iAB, iAB'))
   S ./= maximum(S)
   for i in eachindex(t)
@@ -104,10 +114,11 @@ function gilt(A::ITensor, B::ITensor, C::ITensor, D::ITensor; ϵ)
   end
   R = ITensor(t, commonind(U, S)) * U
   @assert hassameinds([iAB, iAB'], R)
-  U, V = split(R, iAB)
-  A *= U; B *= noprime(V)
+  U, V = split(R, iAB; righttags = "gilt")
+  U, setprime!(V, plev(iAB), iAB')
+  # A *= U; B *= noprime(V)
+  # U, V
 end
-
 
 function trg(A::ITensor, iv::Index, ih::Index; maxdim, stepnum, eigvalnum)
   @assert hassameinds([iv, iv', ih, ih'], A)
@@ -115,10 +126,41 @@ function trg(A::ITensor, iv::Index, ih::Index; maxdim, stepnum, eigvalnum)
   eigval = zeros(eigvalnum, stepnum)
 
   for i in 1:stepnum
-    F1, F3 = split(A, (iv, ih); maxdim, righttags = "v$i")
-    F2, F4 = split(A, (iv, ih'); maxdim, righttags = "h$i")
+    F1, F3 = split(A, (iv, ih); maxdim, conn = false, righttags = "v$i")
+    F2, F4 = split(A, (iv, ih'); maxdim, conn = false, righttags = "h$i")
     iv = uniqueind(F1, A); ih = uniqueind(F2, A)
     A = F1' * F2 * noprime(F3) * F4
+    # A = F1 * F2 * F3 * F4
+    @assert hassameinds([iv, iv', ih, ih'], A)
+
+    M = A * δ(iv, iv')
+    norms[i] = scalar(M * δ(ih, ih'))
+    A /= norms[i]
+    _, S, _ = svd(M, ih; maxdim = eigvalnum)
+    S = storage(S)
+    eigval[eachindex(S), i] = S / norms[i]
+  end
+
+  norms, eigval
+end
+
+function gilttnr(A::ITensor, iv::Index, ih::Index; maxdim, stepnum, eigvalnum, ϵ)
+  @assert hassameinds([iv, iv', ih, ih'], A)
+  norms = zeros(stepnum)
+  eigval = zeros(eigvalnum, stepnum)
+
+  F = Vector{ITensor}(undef, 4)
+  for i in 1:stepnum
+    F[1], F[3] = split(A, (iv, ih); maxdim, conn = false, righttags = "v$i")
+    F[2], F[4] = split(A, (iv, ih'); maxdim, conn = false, righttags = "h$i")
+    iv = uniqueind(F[1], A); ih = uniqueind(F[2], A)
+    F[1] = F[1]'; F[3] = noprime(F[3])
+    for i in 1:4
+      U, V = gilt(F[i], F[mod1(i + 1, 4)], F[mod1(i + 2, 4)], F[mod1(i + 3, 4)]; ϵ)
+      F[i] *= U; F[mod1(i + 1, 4)] *= V
+    end
+    # A = F[1]' * F[2] * noprime(F[3]) * F[4]
+    A = F[1] * F[2] * F[3] * F[4]
     @assert hassameinds([iv, iv', ih, ih'], A)
 
     M = A * δ(iv, iv')
