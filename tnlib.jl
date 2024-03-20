@@ -84,84 +84,118 @@ function hotrg(T::ITensor, iv::Index, ih::Index; maxdim, stepnum, eigvalnum, wit
   norms, cftval
 end
 
-
-"""
-Insert isometry between A and B.
-"""
-function gilt(A::ITensor, B::ITensor, C::ITensor, D::ITensor; ϵ)
-  T = [A, B, C, D]
-  iin = []
-  for i in 1:4
-    @assert length(commoninds(T[i], T[mod1(i + 1, 4)])) == 1
-    push!(iin, commonind(T[i], T[mod1(i + 1, 4)]))
-  end
-  for i in 1:2
-    @assert length(commoninds(T[i], T[mod1(i + 2, 4)])) == 0
+function gilt_plaq(A1::ITensor, A2::ITensor, iv::Index, ih::Index; ϵ)
+  done_legs = Dict(zip([ih, iv, ih', iv'], [false for _ in 1:4]))
+  for leg in Iterators.cycle(keys(done_legs))
+    A1, A2, done_legs[leg] = apply_gilt(A1, A2, iv, ih, leg; ϵ)
+    all(values(done_legs)) && break
   end
 
-  iAB = commonind(A, B)
-  TT = Vector{ITensor}(undef, 4)
-  for i in 1:4
-    TT[i] = T[i] * prime(T[i], 2, iin[i], iin[mod1(i - 1, 4)])
-  end
-  EE = ((TT[3] * TT[4]) * TT[1]) * prime(TT[2], iAB, iAB'')
-
-  U, S, _ = svd(EE, (iAB, iAB'))
-  t = storage(U * δ(iAB, iAB'))
-  S ./= maximum(S)
-  for i in eachindex(t)
-    t[i] *= storage(S)[i] |> x -> x^2 / (x^2 + ϵ^2)
-  end
-  R = ITensor(t, commonind(U, S)) * U
-  @assert hassameinds([iAB, iAB'], R)
-  U, V = split(R, iAB; righttags = "gilt")
-  U, setprime!(V, plev(iAB), iAB')
-  # A *= U; B *= noprime(V)
-  # U, V
+  A1, A2
 end
 
-function trg(A::ITensor, iv::Index, ih::Index; maxdim, stepnum, eigvalnum)
-  @assert hassameinds([iv, iv', ih, ih'], A)
-  norms = zeros(stepnum)
-  eigval = zeros(eigvalnum, stepnum)
+function apply_gilt(A1::ITensor, A2::ITensor, iv, ih, leg::Index; ϵ)
+  U, S = get_envspec(A1, A2, iv, ih, leg)
+  A2 *= δ(leg, leg'')
+  S /= sum(storage(S))
+  Rp = optimize_Rp(U, S; ϵ)
+  Rp1, Rp2 = split(Rp, leg; cutoff = ϵ * 1e-3)
+  A1 *= Rp1; A2 *= Rp2
+  A1, A2, true
+end
 
-  for i in 1:stepnum
-    F1, F3 = split(A, (iv, ih); maxdim, conn = false, righttags = "v$i")
-    F2, F4 = split(A, (iv, ih'); maxdim, conn = false, righttags = "h$i")
-    iv = uniqueind(F1, A); ih = uniqueind(F2, A)
-    A = F1' * F2 * noprime(F3) * F4
-    # A = F1 * F2 * F3 * F4
-    @assert hassameinds([iv, iv', ih, ih'], A)
+function get_envspec(A1, A2, iv, ih, leg)
+  NW = A1 * prime(A1, 2, iv', ih')
+  NE = A2 * prime(A2, 2, ih', iv)
+  SE = A1 * prime(A1, 2, iv, ih)
+  SW = A2 * prime(A2, 2, iv', ih)
+  replaceinds!(NE, leg => leg''', leg'' => leg''''')
+  replaceinds!(SW, leg => leg''', leg'' => leg''''')
 
-    M = A * δ(iv, iv')
-    norms[i] = scalar(M * δ(ih, ih'))
-    A /= norms[i]
-    _, S, _ = svd(M, ih; maxdim = eigvalnum)
-    S = storage(S)
-    eigval[eachindex(S), i] = S / norms[i]
+  EE = NW * NE * SE * SW
+  # leg1 = uniqueind(A1, A2)
+  # leg2 = uniqueind(A2, A1)
+  D, U = eigen(EE, (leg'', leg'''''), (leg, leg'''); ishermitian = true)
+  U, sqrt.(abs.(D))
+end
+
+function optimize_Rp(U, S; ϵ)
+  leg1, leg2 = uniqueinds(U, S)
+  t = U * δ(leg1, leg2)
+
+  C_err_constterm = norm(t * S)
+  function C_err(tp)
+    diff = t - tp
+    diff *= S
+    norm(diff) / C_err_constterm
   end
 
-  norms, eigval
+  weight = zero(collect(storage(S)))
+  for i in eachindex(weight)
+    ratio = storage(S)[i] / ϵ
+    weight[i] = ratio^2 / (1 + ratio^2)
+  end
+  iUS = commonind(t, S)
+  w = diagITensor(weight, iUS, iUS')
+  tp = replaceinds(t * w, iUS' => iUS)
+  Rp = U * tp
+
+  u, s, v = svd(Rp, leg1; cutoff = ϵ * 1e-3)
+  done_recursing = maximum(abs.(storage(s) .- 1)) < 1e-2
+  if !done_recursing
+    ssqrt = sqrt.(s)
+    us = u * ssqrt
+    vs = v * ssqrt
+    UuvsS = S * U * us * vs
+    # replaceinds!(UuvsS, commonind(s, v) => leg1, commonind(u, s) => leg2)
+    Uinner, Sinner, _ = svd(UuvsS, (commonind(s, v), commonind(u, s)))
+    Sinner /= sum(storage(Sinner))
+    Rinner = optimize_Rp(Uinner, Sinner; ϵ)
+    Rp = Rinner * us * vs
+  end
+
+  Rp
+end
+
+function trgstep(A1, A2, iv, ih, log_fact; maxdim)
+  F = Vector{ITensor}(undef, 4)
+  F[1], F[3] = split(A1, (iv, ih); maxdim, conn = false, righttags = "i13")
+  F[2], F[4] = split(A2, (iv', ih); maxdim, conn = false, righttags = "i24")
+  A = F[1] * F[2] * F[3] * F[4]
+  iv = commonind(F[1], A); ih = commonind(F[2], A)
+  A, iv, ih, log_fact * 2
+end
+
+function gilttnr_step(A, iv, ih, log_fact; maxdim, ϵ)
+  m = norm(A)
+  if !iszero(m)
+    A /= m
+    log_fact += log(m)
+  end
+
+  if ϵ > 0
+    A1, A2 = gilt_plaq(A, swapprime(A, 0, 1), iv, ih; ϵ)
+  else
+    A1, A2 = A, A
+  end
+
+  A, iv, ih, log_fact = trgstep(A1, A2, iv, ih ,log_fact; maxdim)
+  A, iv, ih, log_fact = trgstep(A, A, iv, ih, log_fact; maxdim)
+
+  replaceinds!(A, iv => ih, ih => iv', iv' => ih', ih' => iv)
+
+  A, iv, ih, log_fact
 end
 
 function gilttnr(A::ITensor, iv::Index, ih::Index; maxdim, stepnum, eigvalnum, ϵ)
   @assert hassameinds([iv, iv', ih, ih'], A)
   norms = zeros(stepnum)
   eigval = zeros(eigvalnum, stepnum)
+  log_fact = 0
 
-  F = Vector{ITensor}(undef, 4)
   for i in 1:stepnum
-    F[1], F[3] = split(A, (iv, ih); maxdim, conn = false, righttags = "v$i")
-    F[2], F[4] = split(A, (iv, ih'); maxdim, conn = false, righttags = "h$i")
-    iv = uniqueind(F[1], A); ih = uniqueind(F[2], A)
-    F[1] = F[1]'; F[3] = noprime(F[3])
-    for i in 1:4
-      U, V = gilt(F[i], F[mod1(i + 1, 4)], F[mod1(i + 2, 4)], F[mod1(i + 3, 4)]; ϵ)
-      F[i] *= U; F[mod1(i + 1, 4)] *= V
-    end
-    # A = F[1]' * F[2] * noprime(F[3]) * F[4]
-    A = F[1] * F[2] * F[3] * F[4]
-    @assert hassameinds([iv, iv', ih, ih'], A)
+    println("step $i:")
+    A, iv, ih, log_fact = gilttnr_step(A, iv, ih, log_fact; maxdim, ϵ)
 
     M = A * δ(iv, iv')
     norms[i] = scalar(M * δ(ih, ih'))

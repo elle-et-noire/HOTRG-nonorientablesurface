@@ -123,10 +123,10 @@ function err4ϵ(;χ, stepnum, ϵs)
   plot()
   f_exact = freeenergy(Ising(), β)
   for i in eachindex(ϵs)
-    plot!(abs.(f[i] .- f_exact), yscale = :log10, label = "\epsilon = $(ϵs[i])", xlabel = "RG step", ylabel = "error of free energy"; marker = :auto)
+    plot!(abs.(f[i] .- f_exact), yscale = :log10, label = "\epsilon = $(ϵs[i])", xlabel = "RG step", ylabel = "error of free energy")
   end
 
-  norms, _ = trg(bulk(weight(Ising(), β))...; maxdim = χ, stepnum, eigvalnum = 1)
+  norms, _ = gilttnr(bulk(weight(Ising(), β))...; maxdim = χ, stepnum, eigvalnum = 1)
   lnz = logpartfunc(norms, sitenum_per_step = 2)
   f_trg = lnz / -β
   plot!(abs.(f_trg .- f_exact), label = "trg")
@@ -140,4 +140,4 @@ function err4ϵ(;χ, stepnum, ϵs)
 end
 
 # @time impltrg(χ = 24, stepnum = 15, eigvalnum = 3, relT = [0.95:1e-2:1.05;])
-@time err4ϵ(χ = 24, stepnum = 25, ϵs = [1e-4, 1e-5, 1e-6, 1e-7, 1e-8, 1e-9, 1e-10])
+@time err4ϵ(χ = 8, stepnum = 10, ϵs = [1e-6])
