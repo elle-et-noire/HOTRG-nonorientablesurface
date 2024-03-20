@@ -109,10 +109,17 @@ function get_envspec(A1, A2, iv, ih, leg)
   NE = A2 * prime(A2, 2, ih', iv)
   SE = A1 * prime(A1, 2, iv, ih)
   SW = A2 * prime(A2, 2, iv', ih)
+  display(NW)
+  display(NE)
+  display(SE)
+  display(SW)
+  println()
   replaceinds!(NE, leg => leg''', leg'' => leg''''')
   replaceinds!(SW, leg => leg''', leg'' => leg''''')
 
   EE = NW * NE * SE * SW
+  println(inds(EE))
+  println()
   # leg1 = uniqueind(A1, A2)
   # leg2 = uniqueind(A2, A1)
   D, U = eigen(EE, (leg'', leg'''''), (leg, leg'''); ishermitian = true)
@@ -120,6 +127,7 @@ function get_envspec(A1, A2, iv, ih, leg)
 end
 
 function optimize_Rp(U, S; ϵ)
+  println("optimizing Rp...")
   leg1, leg2 = uniqueinds(U, S)
   t = U * δ(leg1, leg2)
 
@@ -142,17 +150,16 @@ function optimize_Rp(U, S; ϵ)
 
   u, s, v = svd(Rp, leg1; cutoff = ϵ * 1e-3)
   done_recursing = maximum(abs.(storage(s) .- 1)) < 1e-2
-  if !done_recursing
-    ssqrt = sqrt.(s)
-    us = u * ssqrt
-    vs = v * ssqrt
-    UuvsS = S * U * us * vs
-    # replaceinds!(UuvsS, commonind(s, v) => leg1, commonind(u, s) => leg2)
-    Uinner, Sinner, _ = svd(UuvsS, (commonind(s, v), commonind(u, s)))
-    Sinner /= sum(storage(Sinner))
-    Rinner = optimize_Rp(Uinner, Sinner; ϵ)
-    Rp = Rinner * us * vs
-  end
+  # if !done_recursing
+  #   ssqrt = sqrt.(s)
+  #   us = u * ssqrt
+  #   vs = v * ssqrt
+  #   UuvsS = S * U * us * vs
+  #   Uinner, Sinner, _ = svd(UuvsS, (commonind(s, v), commonind(u, s)))
+  #   Sinner /= sum(storage(Sinner))
+  #   Rinner = optimize_Rp(Uinner, Sinner; ϵ)
+  #   Rp = Rinner * us * vs
+  # end
 
   Rp
 end
@@ -167,6 +174,7 @@ function trgstep(A1, A2, iv, ih, log_fact; maxdim)
 end
 
 function gilttnr_step(A, iv, ih, log_fact; maxdim, ϵ)
+  @assert hassameinds([iv, ih, iv', ih'], A)
   m = norm(A)
   if !iszero(m)
     A /= m
@@ -189,7 +197,7 @@ end
 
 function gilttnr(A::ITensor, iv::Index, ih::Index; maxdim, stepnum, eigvalnum, ϵ)
   @assert hassameinds([iv, iv', ih, ih'], A)
-  norms = zeros(stepnum)
+  lnz = zeros(stepnum)
   eigval = zeros(eigvalnum, stepnum)
   log_fact = 0
 
@@ -198,14 +206,13 @@ function gilttnr(A::ITensor, iv::Index, ih::Index; maxdim, stepnum, eigvalnum, �
     A, iv, ih, log_fact = gilttnr_step(A, iv, ih, log_fact; maxdim, ϵ)
 
     M = A * δ(iv, iv')
-    norms[i] = scalar(M * δ(ih, ih'))
-    A /= norms[i]
+    lnz[i] = log(scalar(M * δ(ih, ih'))) + log_fact
     _, S, _ = svd(M, ih; maxdim = eigvalnum)
     S = storage(S)
-    eigval[eachindex(S), i] = S / norms[i]
+    eigval[eachindex(S), i] = S / maximum(S)
   end
 
-  norms, eigval
+  lnz, eigval
 end
 
 function logpartfunc(norms; sitenum_per_step)

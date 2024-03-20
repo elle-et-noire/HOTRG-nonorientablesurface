@@ -116,8 +116,10 @@ function err4ϵ(;χ, stepnum, ϵs)
   f = []
   β = inv(Tc(Ising()))
   for ϵ in ϵs
-    norms, _ = gilttnr(bulk(weight(Ising(), β))...; maxdim = χ, stepnum, eigvalnum = 1, ϵ)
-    lnz = logpartfunc(norms, sitenum_per_step = 2)
+    lnz, _ = gilttnr(bulk(weight(Ising(), β))...; maxdim = χ, stepnum, eigvalnum = 1, ϵ)
+    for i in eachindex(lnz)
+      lnz[i] /= 4^i
+    end
     push!(f, lnz / -β)
   end
   plot()
@@ -126,18 +128,21 @@ function err4ϵ(;χ, stepnum, ϵs)
     plot!(abs.(f[i] .- f_exact), yscale = :log10, label = "\epsilon = $(ϵs[i])", xlabel = "RG step", ylabel = "error of free energy")
   end
 
-  norms, _ = gilttnr(bulk(weight(Ising(), β))...; maxdim = χ, stepnum, eigvalnum = 1)
-  lnz = logpartfunc(norms, sitenum_per_step = 2)
+  lnz, _ = gilttnr(bulk(weight(Ising(), β))...; maxdim = χ, stepnum, eigvalnum = 1, ϵ = 0.0)
+  for i in eachindex(lnz)
+    lnz[i] /= 4^i
+  end
   f_trg = lnz / -β
   plot!(abs.(f_trg .- f_exact), label = "trg")
   open("data/ferr.txt", "w") do fp
     for i in eachindex(ϵs)
       Base.print_array(fp, (f[i] .- f_exact))
     end
+    println(fp)
     Base.print_array(fp, (f_trg .- f_exact))
   end
   savefig("fig/ferr.png")
 end
 
 # @time impltrg(χ = 24, stepnum = 15, eigvalnum = 3, relT = [0.95:1e-2:1.05;])
-@time err4ϵ(χ = 8, stepnum = 10, ϵs = [1e-6])
+@time err4ϵ(χ = 24, stepnum = 10, ϵs = [0.0])
