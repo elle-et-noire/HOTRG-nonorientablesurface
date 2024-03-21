@@ -145,4 +145,4 @@ function err4ϵ(;χ, stepnum, ϵs)
 end
 
 # @time impltrg(χ = 24, stepnum = 15, eigvalnum = 3, relT = [0.95:1e-2:1.05;])
-@time err4ϵ(χ = 24, stepnum = 10, ϵs = [0.0])
+@time err4ϵ(χ = 16, stepnum = 12, ϵs = [1e-12])

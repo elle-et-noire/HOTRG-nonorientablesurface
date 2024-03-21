@@ -85,8 +85,9 @@ function hotrg(T::ITensor, iv::Index, ih::Index; maxdim, stepnum, eigvalnum, wit
 end
 
 function gilt_plaq(A1::ITensor, A2::ITensor, iv::Index, ih::Index; ϵ)
-  done_legs = Dict(zip([ih, iv, ih', iv'], [false for _ in 1:4]))
-  for leg in Iterators.cycle(keys(done_legs))
+  legs = [ih, iv, ih', iv']
+  done_legs = Dict(zip(legs, [false for _ in 1:4]))
+  for leg in Iterators.cycle(legs)
     A1, A2, done_legs[leg] = apply_gilt(A1, A2, iv, ih, leg; ϵ)
     all(values(done_legs)) && break
   end
@@ -98,37 +99,33 @@ function apply_gilt(A1::ITensor, A2::ITensor, iv, ih, leg::Index; ϵ)
   U, S = get_envspec(A1, A2, iv, ih, leg)
   A2 *= δ(leg, leg'')
   S /= sum(storage(S))
-  Rp = optimize_Rp(U, S; ϵ)
-  Rp1, Rp2 = split(Rp, leg; cutoff = ϵ * 1e-3)
+  Rp = optimize_Rp(U, S, leg, leg''; ϵ)
+  # Rp1, Rp2 = split(Rp, leg; cutoff = ϵ * 1e-3)
+  Rp1, Rp2 = split(Rp, leg)
+  i12 = commonind(Rp1, Rp2)
   A1 *= Rp1; A2 *= Rp2
+  replaceinds!(A1, i12 => leg)
+  replaceinds!(A2, i12 => leg)
   A1, A2, true
 end
 
 function get_envspec(A1, A2, iv, ih, leg)
-  NW = A1 * prime(A1, 2, iv', ih')
-  NE = A2 * prime(A2, 2, ih', iv)
-  SE = A1 * prime(A1, 2, iv, ih)
-  SW = A2 * prime(A2, 2, iv', ih)
-  display(NW)
-  display(NE)
-  display(SE)
-  display(SW)
-  println()
-  replaceinds!(NE, leg => leg''', leg'' => leg''''')
-  replaceinds!(SW, leg => leg''', leg'' => leg''''')
+  NW = A1 * prime(A1, 3, iv', ih')
+  NE = A2 * prime(A2, 3, ih', iv)
+  SE = A1 * prime(A1, 3, iv, ih)
+  SW = A2 * prime(A2, 3, iv', ih)
+  replaceinds!(NE, leg => leg'', leg''' => leg''''')
+  replaceinds!(SW, leg => leg'', leg''' => leg''''')
 
   EE = NW * NE * SE * SW
-  println(inds(EE))
-  println()
-  # leg1 = uniqueind(A1, A2)
-  # leg2 = uniqueind(A2, A1)
-  D, U = eigen(EE, (leg'', leg'''''), (leg, leg'''); ishermitian = true)
+  D, U = eigen(EE, (leg''', leg'''''), (leg, leg''); ishermitian = true)
   U, sqrt.(abs.(D))
 end
 
-function optimize_Rp(U, S; ϵ)
+function optimize_Rp(U, S, leg1, leg2; ϵ)
   println("optimizing Rp...")
-  leg1, leg2 = uniqueinds(U, S)
+  # leg1, leg2 = uniqueinds(U, S)
+  # leg1 = leg; leg2 = leg''
   t = U * δ(leg1, leg2)
 
   C_err_constterm = norm(t * S)
@@ -146,10 +143,11 @@ function optimize_Rp(U, S; ϵ)
   iUS = commonind(t, S)
   w = diagITensor(weight, iUS, iUS')
   tp = replaceinds(t * w, iUS' => iUS)
-  Rp = U * tp
+  # Rp = U * tp
+  Rp = U * t
 
-  u, s, v = svd(Rp, leg1; cutoff = ϵ * 1e-3)
-  done_recursing = maximum(abs.(storage(s) .- 1)) < 1e-2
+  # u, s, v = svd(Rp, leg1; cutoff = ϵ * 1e-3)
+  # done_recursing = maximum(abs.(storage(s) .- 1)) < 1e-2
   # if !done_recursing
   #   ssqrt = sqrt.(s)
   #   us = u * ssqrt
@@ -157,7 +155,7 @@ function optimize_Rp(U, S; ϵ)
   #   UuvsS = S * U * us * vs
   #   Uinner, Sinner, _ = svd(UuvsS, (commonind(s, v), commonind(u, s)))
   #   Sinner /= sum(storage(Sinner))
-  #   Rinner = optimize_Rp(Uinner, Sinner; ϵ)
+  #   Rinner = optimize_Rp(Uinner, Sinner, commonind(s, v), commonind(u, s); ϵ)
   #   Rp = Rinner * us * vs
   # end
 
@@ -184,11 +182,14 @@ function gilttnr_step(A, iv, ih, log_fact; maxdim, ϵ)
   if ϵ > 0
     A1, A2 = gilt_plaq(A, swapprime(A, 0, 1), iv, ih; ϵ)
   else
-    A1, A2 = A, A
+    A1, A2 = A, swapprime(A, 0, 1)
   end
 
+  display(A1)
+  display(A2)
   A, iv, ih, log_fact = trgstep(A1, A2, iv, ih ,log_fact; maxdim)
-  A, iv, ih, log_fact = trgstep(A, A, iv, ih, log_fact; maxdim)
+  A, iv, ih, log_fact = trgstep(A, swapprime(A, 0, 1), iv, ih, log_fact; maxdim)
+  display(A)
 
   replaceinds!(A, iv => ih, ih => iv', iv' => ih', ih' => iv)
 
