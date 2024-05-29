@@ -9,12 +9,12 @@ function split(A::ITensor; kwargs...)
   U, V
 end
 
-function bulk(vweight, hweight = vweight)
+function bulk(vweight, hweight=vweight)
   iv = Index(size(vweight)[1])
   ih = Index(size(hweight)[1])
 
-  V1, V2 = split(ITensor(vweight, iv, iv'); righttags = "v")
-  H1, H2 = split(ITensor(hweight, ih, ih'); righttags = "h")
+  V1, V2 = split(ITensor(vweight, iv, iv'); righttags="v")
+  H1, H2 = split(ITensor(hweight, ih, ih'); righttags="h")
   A = δ(iv, ih, iv', ih') * V1 * V2 * H1 * H2
 
   A, uniqueind(V1, iv), uniqueind(H1, ih)
@@ -30,7 +30,7 @@ function isometry(A::ITensor, B::ITensor; kwargs...)
   U
 end
 
-function hotrg(T::ITensor, iv::Index, ih::Index; maxdim, stepnum, eigvalnum, withsro = true)
+function hotrg(T::ITensor, iv::Index, ih::Index; maxdim, stepnum, eigvalnum, withsro=true)
   @assert hassameinds([iv, ih, iv', ih'], T)
   norms = zeros(stepnum)
   cftval = Dict(zip(["<C|i>", "<R|i>", "eigval"], [zeros(eigvalnum, stepnum) for _ in 1:3]))
@@ -38,8 +38,8 @@ function hotrg(T::ITensor, iv::Index, ih::Index; maxdim, stepnum, eigvalnum, wit
   # init spatial reflection operator
   O = δ(ih, ih')
   o(i, j) = begin
-  	@assert hassameinds([ih, ih'], O)
-	replaceinds(O, ih => i, ih' => j)
+    @assert hassameinds([ih, ih'], O)
+    replaceinds(O, ih => i, ih' => j)
   end
 
   prime!(T, ih')
@@ -49,14 +49,16 @@ function hotrg(T::ITensor, iv::Index, ih::Index; maxdim, stepnum, eigvalnum, wit
     else
       B = prime(T, ih, ih'') * δ(iv, iv'')
     end
-    U = isometry(T, B; maxdim, lefttags = "h$i")
+    U = isometry(T, B; maxdim, lefttags="h$i")
     T *= B
 
     # measure cft data of crosscap and rainbow boundary state
     M = T * δ(iv, iv'')
-    U1, S, _ = svd(M, (ih, ih'); maxdim = eigvalnum)
+    U1, S, _ = svd(M, (ih, ih'); maxdim=eigvalnum)
     S = storage(S)
-    norms[i] = S[1]; S /= norms[i]; T /= norms[i]
+    norms[i] = S[1]
+    S /= norms[i]
+    T /= norms[i]
     D = length(S)
     cftval["eigval"][1:D, i] = S
 
@@ -69,13 +71,16 @@ function hotrg(T::ITensor, iv::Index, ih::Index; maxdim, stepnum, eigvalnum, wit
       cftval["<C|i>"][1:D, i] = storage(U1 * o(ih, ih'))
     end
 
-    T *= U; T *= prime(U', ih', ih'')
+    T *= U
+    T *= prime(U', ih', ih'')
     O = U * o(ih, ih''') * o(ih', ih'') * prime(U', ih', ih'')
     ih = commonind(T, U)
-	@assert hassameinds([ih, ih'], O)
+    @assert hassameinds([ih, ih'], O)
 
-    U = isometry(T, T'; maxdim, lefttags = "v$i")
-    T *= T'; T *= U; T *= prime(U', iv', iv'')
+    U = isometry(T, T'; maxdim, lefttags="v$i")
+    T *= T'
+    T *= U
+    T *= prime(U', iv', iv'')
     iv = commonind(T, U)
   end
 
